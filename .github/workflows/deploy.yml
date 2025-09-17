@@ -1,0 +1,63 @@
+name: Deploy VPC Lattice Guidance (auto-create example & pass ID)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-northeast-1
+  # 这两个名字可按需修改
+  EXAMPLE_STACK_NAME: vpclattice-example
+  BASELINE_STACK_NAME: guidance-vpclattice
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # 如果你用 OIDC 角色，这里换成 role-to-assume / role-session-name
+
+      # 1) 部署 vpc-lattice_example（只要文件路径对，多次运行会做更新，幂等）
+      - name: Deploy VPC Lattice example stack
+        run: |
+          set -euo pipefail
+          TEMPLATE_PATH="vpc-lattice_example/vpc-lattice_example.yaml"  # ← 如文件名不同请改这里
+          aws cloudformation deploy \
+            --template-file "$TEMPLATE_PATH" \
+            --stack-name "${EXAMPLE_STACK_NAME}" \
+            --capabilities CAPABILITY_NAMED_IAM
+
+      # 2) 读取 Outputs 里的 ServiceNetworkId
+      - name: Read ServiceNetworkId from example stack
+        id: read_sn
+        run: |
+          set -euo pipefail
+          SN_ID=$(aws cloudformation describe-stacks \
+            --stack-name "${EXAMPLE_STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ServiceNetworkId'].OutputValue | [0]" \
+            --output text)
+          if [ -z "$SN_ID" ] || [ "$SN_ID" = "None" ]; then
+            echo "ServiceNetworkId not found in stack outputs" >&2
+            exit 1
+          fi
+          echo "SERVICE_NETWORK_ID=$SN_ID" >> $GITHUB_ENV
+          echo "Found ServiceNetworkId: $SN_ID"
+
+      # 3) 部署 baseline guidance 栈，把 ServiceNetworkId 传进去
+      - name: Deploy guidance baseline stack
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file guidance-stack.yml \
+            --stack-name "${BASELINE_STACK_NAME}" \
+            --parameter-overrides VPCLatticeServiceNetwork="${SERVICE_NETWORK_ID}" \
+            --capabilities CAPABILITY_IAM
