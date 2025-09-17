@@ -30,7 +30,7 @@ jobs:
       - name: Deploy VPC Lattice example stack
         run: |
           set -euo pipefail
-          TEMPLATE_PATH="vpc-lattice_example/vpc-lattice_example.yaml"  # ← 如文件名不同请改这里
+          TEMPLATE_PATH="vpc-lattice_example/vpc-lattice_service.yml"  # ← 如文件名不同请改这里
           aws cloudformation deploy \
             --template-file "$TEMPLATE_PATH" \
             --stack-name "${EXAMPLE_STACK_NAME}" \
