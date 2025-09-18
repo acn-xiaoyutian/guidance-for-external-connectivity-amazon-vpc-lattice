@@ -59,5 +59,4 @@ jobs:
             --template-file guidance-stack.yml \
             --stack-name "${BASELINE_STACK_NAME}" \
             --parameter-overrides VPCLatticeServiceNetwork="${SERVICE_NETWORK_ID}" \
-            --parameter-overrides DeploymentMode="PRIVATE" \
             --capabilities CAPABILITY_IAM
