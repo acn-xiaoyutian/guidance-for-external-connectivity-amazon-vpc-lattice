@@ -24,26 +24,6 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          # 如果你用 OIDC 角色，这里换成 role-to-assume / role-session-name
-
-      # - name: Login to ECR (us-east-1)
-      #   run: |
-      #     aws ecr get-login-password --region $AWS_REGION \
-      #       | docker login --username AWS --password-stdin \
-      #         "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$AWS_REGION.amazonaws.com"
-
-      # - name: Build & Push NGINX image to ECR
-      #   run: |
-      #     set -euo pipefail
-      #     ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text)
-      #     REPO=external-lattice-proxy
-      #     aws ecr describe-repositories --repository-names $REPO >/dev/null 2>&1 || \
-      #       aws ecr create-repository --repository-name $REPO
-
-      #     IMAGE="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO:${GITHUB_SHA}"
-      #     docker build -t "$IMAGE" ./Dockerfiles/nginx
-      #     docker push "$IMAGE"
-      #     echo "IMAGE_URI=$IMAGE" >> $GITHUB_ENV
 
       # 1) 部署 vpc-lattice_example（只要文件路径对，多次运行会做更新，幂等）
       - name: Deploy VPC Lattice example stack
@@ -55,23 +35,23 @@ jobs:
             --stack-name "${EXAMPLE_STACK_NAME}" \
             --capabilities CAPABILITY_NAMED_IAM
 
-      # 2) 读取 Outputs 里的 ServiceNetworkId
-      - name: Read ServiceNetworkId from example stack
+      # 2) 读取 Outputs 里的 VPCLatticeServiceNetwork
+      - name: Read VPCLatticeServiceNetwork from example stack
         id: read_sn
         run: |
           set -euo pipefail
           SN_ID=$(aws cloudformation describe-stacks \
             --stack-name "${EXAMPLE_STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='ServiceNetworkId'].OutputValue | [0]" \
+            --query "Stacks[0].Outputs[?OutputKey=='VPCLatticeServiceNetwork'].OutputValue | [0]" \
             --output text)
           if [ -z "$SN_ID" ] || [ "$SN_ID" = "None" ]; then
-            echo "ServiceNetworkId not found in stack outputs" >&2
+            echo "VPCLatticeServiceNetwork not found in stack outputs" >&2
             exit 1
           fi
           echo "SERVICE_NETWORK_ID=$SN_ID" >> $GITHUB_ENV
-          echo "Found ServiceNetworkId: $SN_ID"
+          echo "Found VPCLatticeServiceNetwork: $SN_ID"
 
-      # 3) 部署 baseline guidance 栈，把 ServiceNetworkId 传进去
+      # 3) 部署 baseline guidance 栈，把 VPCLatticeServiceNetwork 传进去
       - name: Deploy guidance baseline stack
         run: |
           set -euo pipefail
@@ -79,4 +59,5 @@ jobs:
             --template-file guidance-stack.yml \
             --stack-name "${BASELINE_STACK_NAME}" \
             --parameter-overrides VPCLatticeServiceNetwork="${SERVICE_NETWORK_ID}" \
+            --parameter-overrides DeploymentMode="PRIVATE" \
             --capabilities CAPABILITY_IAM

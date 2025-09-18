@@ -1,14 +1,22 @@
-AWSTemplateFormatVersion: 2010-09-09
-Description: VPC Lattice service - Example
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VPC Lattice service - Example (Custom domain optional)
 
 Parameters:
   CustomDomainName:
     Type: String
-    Description: Custom Domain Name (VPC Lattice service)
+    Default: ""                         # ← 为空表示不使用自定义域名
+    Description: Custom Domain Name (VPC Lattice service). Leave empty to skip.
   CertificateArn:
     Type: String
-    Description: Certificate ARN (for HTTPS connection)
-  
+    Default: ""                         # ← 为空表示不使用自定义域名
+    Description: Certificate ARN for HTTPS. Leave empty to skip.
+
+Conditions:
+  UseCustomDomain:
+    Fn::And:
+      - Fn::Not: [ Fn::Equals: [ !Ref CustomDomainName, "" ] ]
+      - Fn::Not: [ Fn::Equals: [ !Ref CertificateArn, "" ] ]
+
 Resources:
   # ---------- VPC LATTICE RESOURCES ----------
   VPCLatticeServiceNetwork:
@@ -16,36 +24,39 @@ Resources:
     Properties:
       Name: vpc-lattice-service-network
       AuthType: AWS_IAM
-  
+
   VPCLatticeServiceNetworkAuthPolicy:
     Type: AWS::VpcLattice::AuthPolicy
     Properties:
       ResourceIdentifier: !Ref VPCLatticeServiceNetwork
       Policy:
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal: '*'
-            Action: '*'
-            Resource: '*'
+            Principal: "*"
+            Action: "*"
+            Resource: "*"
 
   VPCLatticeService:
     Type: AWS::VpcLattice::Service
     Properties:
       Name: vpc-lattice-service
-      AuthType: AWS_IAM 
-      CustomDomainName: !Ref CustomDomainName
-      CertificateArn: !Ref CertificateArn
-  
+      AuthType: AWS_IAM
+      # 只有在提供了域名+证书时才设置，反之不设置（使用系统生成域名）
+      CustomDomainName: !If [ UseCustomDomain, !Ref CustomDomainName, !Ref "AWS::NoValue" ]
+      CertificateArn:   !If [ UseCustomDomain, !Ref CertificateArn,   !Ref "AWS::NoValue" ]
+
   VPCLatticeServiceAuthPolicy:
     Type: AWS::VpcLattice::AuthPolicy
     Properties:
       ResourceIdentifier: !Ref VPCLatticeService
       Policy:
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal: '*'
-            Action: '*'
-            Resource: '*'
+            Principal: "*"
+            Action: "*"
+            Resource: "*"
 
   VPCLatticeLambdaTarget:
     Type: AWS::VpcLattice::TargetGroup
@@ -54,13 +65,36 @@ Resources:
       Type: LAMBDA
       Targets:
         - Id: !GetAtt LambdaFunction.Arn
-  
+
+  # 允许 VPC Lattice 调用该 Lambda
+  LambdaPermissionForVPCLattice:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: vpc-lattice.amazonaws.com
+      SourceArn: !GetAtt VPCLatticeLambdaTarget.Arn
+
+  # 默认监听器：如果有自定义域名则用 HTTPS/443，否则 HTTP/80
+  VPCLatticeListener:
+    Type: AWS::VpcLattice::Listener
+    Properties:
+      Name: default-listener
+      ServiceIdentifier: !Ref VPCLatticeService
+      Protocol: !If [ UseCustomDomain, HTTPS, HTTP ]
+      Port:     !If [ UseCustomDomain, 443,   80 ]
+      DefaultAction:
+        Forward:
+          TargetGroups:
+            - TargetGroupIdentifier: !Ref VPCLatticeLambdaTarget
+              Weight: 1
+
   VPCLatticeServiceAssociation:
     Type: AWS::VpcLattice::ServiceNetworkServiceAssociation
     Properties:
       ServiceIdentifier: !Ref VPCLatticeService
       ServiceNetworkIdentifier: !Ref VPCLatticeServiceNetwork
-  
+
   # ---------- LAMBDA FUNCTION ----------
   LambdaFunctionRole:
     Type: AWS::IAM::Role
@@ -70,69 +104,43 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service:
-                - lambda.amazonaws.com
-            Action:
-              - sts:AssumeRole
+              Service: [ lambda.amazonaws.com ]
+            Action: [ sts:AssumeRole ]
       ManagedPolicyArns:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-  
+
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${LambdaFunction}
       RetentionInDays: 7
-  
+
   LambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Description: "Obtaining the AWS Region where the Lambda function is located."
+      Description: "Return the AWS Region where this Lambda runs."
       Runtime: python3.10
       Timeout: 10
       Role: !GetAtt LambdaFunctionRole.Arn
       Handler: index.lambda_handler
-      Code: 
+      Code:
         ZipFile: |-
-          import json
-          import logging
-          import random
-          import string
-          import os
-          import boto3
-
+          import json, logging, os
           log = logging.getLogger("handler")
           log.setLevel(logging.INFO)
-
           def lambda_handler(event, context):
               try:
-                  # We obtain the AWS Region where the Lambda function is located
                   region = os.environ.get('AWS_REGION')
-                  # We log the event received
                   log.info("Received event: %s", json.dumps(event))
-
-                  # Return value
-                  response = region
-                  return {
-                    "statusCode": 200,
-                    "statusDescription": "200 OK",
-                    "body": response
-                  }
-
+                  return {"statusCode": 200, "statusDescription": "200 OK", "body": json.dumps({"region": region,"message": "Hello from VPC Lattice"})}
               except Exception as e:
                   log.exception("whoops")
-                  log.info(e)
-
-                  # Return exception error
-                  return {
-                    "statusCode": 500,
-                    "statusDescription": "500 Internal Server Error",
-                    "body": "Server error - check lambda logs\n"
-                  }
+                  return {"statusCode": 500, "statusDescription": "500 Internal Server Error", "body": "Server error - check lambda logs\n"}
 
 Outputs:
   VPCLatticeServiceNetwork:
     Value: !Ref VPCLatticeServiceNetwork
-    Description: VPC Lattice service network
+    Description: VPC Lattice service network ID
   VPCLatticeServiceGeneratedDomainName:
     Value: !GetAtt VPCLatticeService.DnsEntry.DomainName
-    Description: VPC Lattice service generated domain name
+    Description: VPC Lattice service generated domain name (when no custom domain)
